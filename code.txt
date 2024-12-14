@@ -1,0 +1,754 @@
+# %% 
+
+from pyspark.sql import SparkSession 
+
+import requests 
+
+import os 
+
+from pyspark.sql.functions import expr, udf 
+
+from pyspark.sql.types import StringType 
+
+import re 
+
+import nltk 
+
+from nltk.corpus import stopwords 
+
+import numpy as np 
+
+from tensorflow.keras.preprocessing.text import Tokenizer 
+
+from tensorflow.keras.preprocessing.sequence import pad_sequences 
+
+from tensorflow.keras.models import Sequential 
+
+from tensorflow.keras.layers import Embedding, SimpleRNN, LSTM, Dense, SpatialDropout1D 
+
+from sklearn.model_selection import train_test_split 
+
+ 
+
+# %% 
+
+# Initialize Spark Session 
+
+spark = SparkSession.builder \ 
+
+.appName("Sentiment Analysis") \ 
+
+.getOrCreate() 
+
+ 
+
+# URL of the dataset 
+
+file_url = "https://drive.google.com/uc?id=1erMx3v_-yZUELUaXeQTowcfAvdSz0IhT&export=download" 
+
+ 
+
+# Path where the file will be saved in the current directory 
+
+local_file_path = os.path.join(os.getcwd(), "dataset.csv") 
+
+ 
+
+# Download the file 
+
+response = requests.get(file_url, stream=True) 
+
+with open(local_file_path, "wb") as file: 
+
+for chunk in response.iter_content(chunk_size=1024): 
+
+if chunk: 
+
+file.write(chunk) 
+
+ 
+
+# Read the dataset into a Spark DataFrame 
+
+df = spark.read.option("header", "true").csv(local_file_path).toDF("Label", "Text") 
+
+ 
+
+# %% 
+
+df.show() 
+
+ 
+
+# %% 
+
+# Convert the Freshness column to 1 and 0 using expr 
+
+df = df.withColumn("Label", expr("CASE WHEN Label = 'fresh' THEN 1 ELSE 0 END")) 
+
+ 
+
+# %% 
+
+df.show() 
+
+ 
+
+# %% 
+
+# Define a UDF to clean text 
+
+def clean_text(text_string): 
+
+text_string = text_string.lower() 
+
+text_string = re.sub(r'<.*?>', '', text_string) 
+
+text_string = re.sub(r'[^a-zA-Z\s]', '', text_string) 
+
+text_string = re.sub(r'\s+', ' ', text_string).strip() 
+
+return text_string 
+
+ 
+
+cleantextUDF= udf(lambda y: clean_text(y), StringType()) 
+
+ 
+
+# Apply the UDF to the Text column 
+
+df = df.withColumn("cleaned_text", cleantextUDFclean["Text"])) 
+
+ 
+
+# %% 
+
+# Show the DataFrame with cleaned text 
+
+df.show(truncate=False) 
+
+ 
+
+# %% 
+
+# Collect the cleaned text and labels 
+
+reviews = df.select("cleaned_text").rdd.flatMap(lambda x: x).collect() 
+
+labels = df.select("Label").rdd.flatMap(lambda x: x).collect() 
+
+ 
+
+# %% 
+
+# Tokenize the text 
+
+tokenizer = Tokenizer(num_words=5000) 
+
+tokenizer.fit_on_texts(reviews) 
+
+sequences = tokenizer.texts_to_sequences(reviews) 
+
+ 
+
+# Pad the sequences 
+
+max_sequence_length = 250 
+
+padded_sequences = pad_sequences(sequences, maxlen=max_sequence_length) 
+
+ 
+
+# Convert labels to numpy array 
+
+labels = np.array(labels) 
+
+ 
+
+# %% 
+
+# Define the model 
+
+model = Sequential() 
+
+model.add(Embedding(input_dim=5000, output_dim=100, input_length=max_sequence_length)) 
+
+model.add(SpatialDropout1D(0.2)) 
+
+model.add(SimpleRNN(units=32, return_sequences=True, dropout=0.2, recurrent_dropout=0.2)) 
+
+model.add(LSTM(100, dropout=0.2, recurrent_dropout=0.2)) 
+
+model.add(Dense(1, activation='sigmoid')) 
+
+ 
+
+# Compile the model 
+
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy']) 
+
+ 
+
+# %% 
+
+# Show the model summary 
+
+model.summary() 
+
+ 
+
+# %% 
+
+# Split the data into training and validation sets 
+
+X_train, X_val, y_train, y_val = train_test_split(padded_sequences, labels, test_size=0.2, random_state=42) 
+
+ 
+
+# Train the model 
+
+history = model.fit(X_train, y_train, epochs=10, batch_size=64, validation_data=(X_val, y_val), verbose=2) 
+
+ 
+
+# %% 
+
+model.summary() 
+
+ 
+
+# %% 
+
+# Evaluate the model 
+
+loss, accuracy = model.evaluate(X_val, y_val, verbose=2) 
+
+print(f'Validation Loss: {loss}') 
+
+print(f'Validation Accuracy: {accuracy}') 
+
+ 
+
+# %% 
+
+# Save the model to the current directory 
+
+model_save_path = os.path.join(os.getcwd(), "sentiment_analysis_model.h5") 
+
+model.save(model_save_path) 
+
+print(f"Model saved to {model_save_path}") 
+
+ 
+
+# %% 
+
+ 
+
+ 
+
+ 
+
+ 
+
+ 
+
+import tensorflow as tf 
+
+import numpy as np 
+
+from tensorflow.keras.preprocessing.sequence import pad_sequences 
+
+import re 
+
+import pickle 
+
+ 
+
+ 
+
+ 
+
+def init_models(): 
+
+# Load the pre-trained model 
+
+global model 
+
+model = tf.keras.models.load_model("sentiment_analysis_model.h5") 
+
+print("[========= Loaded RNN Model =========]") 
+
+ 
+
+global tokenizer 
+
+# Load the tokenizer 
+
+with open('tokenizer.pkl', 'rb') as handle: 
+
+tokenizer = pickle.load(handle) 
+
+ 
+
+print("[========= Loaded Tokenizer =========]") 
+
+ 
+
+# Function to clean text 
+
+def clean_text(text): 
+
+text = text.lower() 
+
+text = re.sub(r'<.*?>', '', text) 
+
+text = re.sub(r'[^a-zA-Z\s]', '', text) 
+
+text = re.sub(r'\s+', ' ', text).strip() 
+
+if text == "": 
+
+return None 
+
+else: 
+
+return text.strip() 
+
+ 
+
+ 
+
+# Function to preprocess the text input 
+
+def preprocess_text(text, tokenizer): 
+
+# Clean the text 
+
+text = clean_text(text) 
+
+if text is None: 
+
+return None 
+
+# Calculate max sequence length based on the number of words in the input text 
+
+max_len = len(text.split()) 
+
+# Convert the text to sequences 
+
+sequences = tokenizer.texts_to_sequences([text]) 
+
+# Pad the sequences 
+
+padded_sequences = pad_sequences(sequences, maxlen=max_len, padding='post') 
+
+return padded_sequences 
+
+ 
+
+# Function to interpret prediction 
+
+def interpret_prediction(prediction): 
+
+if prediction < 0.4: 
+
+return 'Negative' 
+
+elif 0.4 <= prediction <= 0.7: 
+
+return 'Neutral' 
+
+else: 
+
+return 'Positive' 
+
+ 
+
+def get_sentiment(input_text, model, tokenizer): 
+
+ 
+
+processed_input = preprocess_text(input_text, tokenizer) 
+
+res = [] 
+
+res.append(input_text) 
+
+ 
+
+if processed_input is None: 
+
+res.append("NA") 
+
+return res 
+
+print(f"Input text: {input_text}") 
+
+print(f"Processed input: {processed_input} {len(processed_input)}") 
+
+ 
+
+prediction = model.predict(processed_input) 
+
+sentiment = interpret_prediction(prediction[0][0]) 
+
+print(f"Sentiment: {sentiment}\n") 
+
+res.append(sentiment) 
+
+return res 
+
+ 
+
+ 
+
+from kafka import KafkaProducer 
+
+import time 
+
+ 
+
+ 
+
+def init_kafka_producer(bootstrap_server): 
+
+global producer  
+
+producer = KafkaProducer(bootstrap_servers='localhost:9092') 
+
+ 
+
+def punch_to_kafka(data, topic): 
+
+ 
+
+if isinstance(data, list): 
+
+for record in data: 
+
+producer.send(topic, record.encode("UTF-8")) 
+
+ 
+
+producer.flush() 
+
+ 
+
+elif isinstance(data, str): 
+
+producer.send(topic, data.encode("UTF-8")) 
+
+producer.flush() 
+
+ 
+
+else: 
+
+print("Error") 
+
+ 
+
+from __future__ import print_function 
+
+ 
+
+import sys 
+
+import os 
+
+ 
+
+#sys.path.append("/home/thenn/spark/spark-3.5.1-bin-hadoop3/bin") 
+
+ 
+
+sys.path.append(os.environ['SPARK_HOME'] + "bin") 
+
+ 
+
+from pyspark.sql import SparkSession 
+
+from pyspark.sql.functions import explode 
+
+from pyspark.sql.functions import split 
+
+ 
+
+from pyspark.sql.functions import concat_ws,col,udf 
+
+from pyspark.sql.types import StringType, ArrayType 
+
+ 
+
+import tensorflow as tf 
+
+ 
+
+#def testfunc(): 
+
+ 
+
+from rnnmodel import * 
+
+ 
+
+#define the UDF for prediction 
+
+getSentimentUDF = udf(lambda x:get_sentiment(x, model, tokenizer),ArrayType(StringType()))  
+
+ 
+
+if __name__ == "__main__": 
+
+model = tf.keras.models.load_model("sentiment_analysis_model.h5") 
+
+tokenizer = None 
+
+with open('tokenizer.pkl', 'rb') as handle: 
+
+tokenizer = pickle.load(handle) 
+
+ 
+
+bootstrapServers = "localhost:9092"  
+
+subscribeType = "subscribe"  
+
+topics = "ytcomments"  
+
+ 
+
+spark = SparkSession\ 
+
+.builder\ 
+
+.appName("StructuredKafkaStreaming")\ 
+
+.getOrCreate() 
+
+ 
+
+spark.sparkContext.setLogLevel("ERROR") 
+
+ 
+
+# Create DataSet representing the stream of input lines from kafka 
+
+lines = spark\ 
+
+.readStream\ 
+
+.format("kafka")\ 
+
+.option("kafka.bootstrap.servers", bootstrapServers)\ 
+
+.option(subscribeType, topics)\ 
+
+.load()\ 
+
+.selectExpr("CAST(value AS STRING)") 
+
+ 
+
+ 
+
+# Split the lines into words 
+
+predictiondf = lines.toDF("value").select( 
+
+getSentimentUDF(col("value")).alias("value") 
+
+) 
+
+ 
+
+sentiments = predictiondf.select(predictiondf.value[0].alias("input"), predictiondf.value[1].alias("sentiment")) 
+
+ 
+
+sentiments = sentiments.select(concat_ws('=', "input", "sentiment").alias("value")) 
+
+ 
+
+ 
+
+publisher = sentiments.selectExpr("CAST(value AS STRING)")\ 
+
+.writeStream\ 
+
+.outputMode('append')\ 
+
+.format('kafka')\ 
+
+.option("kafka.bootstrap.servers", bootstrapServers)\ 
+
+.option("topic", "topic2")\ 
+
+.option("checkpointLocation", "./checkpoints/")\ 
+
+.start() 
+
+publisher.awaitTermination() 
+
+ 
+
+ 
+
+from comments import get_video_comments 
+
+from kafkaproducer import * 
+
+import pytchat 
+
+ 
+
+video_id = input("Enter the video Id: ") # video Id can be found in the youtube url after the ?v= parameter 
+
+# example: https://www.youtube.com/watch?v=WHHmIfog0Fs | video id = WHHmIfog0Fs 
+
+ 
+
+type = int(input("Enter 1 for comments and 2 for live chat: ")) 
+
+ 
+
+COMMENTS = 1 
+
+LIVECHAT = 2 
+
+ 
+
+data = [] 
+
+ 
+
+init_kafka_producer("localhost:9092") 
+
+ 
+
+if type == COMMENTS: #  
+
+print(video_id) 
+
+data = get_video_comments(video_id) 
+
+print(data) 
+
+punch_to_kafka(data, "ytcomments") 
+
+ 
+
+elif type == LIVECHAT: 
+
+chat = pytchat.create(video_id) 
+
+ 
+
+try: 
+
+while chat.is_alive(): 
+
+for c in chat.get().sync_items(): 
+
+print(c.message) 
+
+punch_to_kafka(c.message, "ytcomments")  
+
+ 
+
+except Exception as e: 
+
+# TODO: Parse error logs 
+
+print(e) 
+
+print(f"Exception occured with the payload: {c.message}") 
+
+exit() 
+
+else: 
+
+exit() 
+
+ 
+
+ 
+
+ 
+
+from googleapiclient.discovery import build 
+
+ 
+
+api_key = 'AIzaSyDQPOd5bP7jbabOd1cNZcuM4ttRy8Tw1Yo' 
+
+ 
+
+def get_video_comments(video_id): 
+
+comments = [] 
+
+ 
+
+# creating youtube resource object 
+
+youtube = build('youtube', 'v3', 
+
+developerKey=api_key) 
+
+ 
+
+# retrieve youtube video results 
+
+video_response=youtube.commentThreads().list( 
+
+part='snippet', 
+
+videoId=video_id 
+
+).execute() 
+
+ 
+
+# iterate video response 
+
+while video_response: 
+
+# extracting required info 
+
+# from each result object  
+
+for item in video_response['items']: 
+
+# Extracting comments 
+
+comment = item['snippet']['topLevelComment']['snippet']['textDisplay'] 
+
+comments.append(comment) 
+
+print(comment,end = '\n\n') 
+
+ 
+
+# Again repeat 
+
+if 'nextPageToken' in video_response: 
+
+video_response = youtube.commentThreads().list( 
+
+part = 'snippet', 
+
+videoId = video_id, 
+
+pageToken = video_response['nextPageToken'] 
+
+).execute() 
+
+else: 
+
+break 
+
+return comments 
+
